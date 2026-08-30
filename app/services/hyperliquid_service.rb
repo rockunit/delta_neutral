@@ -36,9 +36,7 @@ class HyperliquidService
   #
   # @param symbol [String] the token symbol (e.g. +"WETH"+)
   # @return [String] the Hyperliquid trading symbol (e.g. +"ETH"+)
-  def self.normalize_symbol(symbol)
-    SYMBOL_MAP.fetch(symbol, symbol)
-  end
+
 
   # @param private_key [String, nil] Hyperliquid signing key; falls back to
   #   +HYPERLIQUID_PRIVATE_KEY+
