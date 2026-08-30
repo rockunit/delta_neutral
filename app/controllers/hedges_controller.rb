@@ -26,7 +26,16 @@ class HedgesController < ApplicationController
       @shorts = []
       flash.now[:alert] = "Could not load Hyperliquid positions."
     end
-    @asset_metrics = [ [ position.asset0, position.asset0_amount, 0 ], [ position.asset1, position.asset1_amount, 1 ] ].map do |asset, pool_amount, asset_index|
+    # Stables
+    STABLE_COINS = %w[USDC USDT DAI BUSD TUSD USDP].freeze
+    
+    @asset_metrics = [
+      [ position.asset0, position.asset0_amount, 0 ],
+      [ position.asset1, position.asset1_amount, 1 ]
+    ].filter_map do |asset, pool_amount, asset_index|
+      # Skip Stables
+      next nil if STABLE_COINS.include?(asset)
+    
       hl_asset = HyperliquidService.normalize_symbol(asset)
       short_data = @shorts.find { |s| s[:asset] == hl_asset }
       current_short = short_data ? short_data[:size].abs : BigDecimal("0")
