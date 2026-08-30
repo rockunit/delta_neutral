@@ -23,6 +23,8 @@
 # @example Sync all active hedges (used by the recurring scheduler)
 #   HedgeSyncJob.perform_later
 class HedgeSyncJob < ApplicationJob
+  STABLE_COINS = %w[USDC USDT DAI BUSD TUSD USDP].freeze
+
   queue_as :default
 
   # Performs the hedge sync.
@@ -62,8 +64,15 @@ class HedgeSyncJob < ApplicationJob
     end
 
     Rails.logger.debug { "[HedgeSyncJob] hedge #{hedge.id} position #{position.id} is active, checking assets" }
-    check_and_rebalance(hedge, position.asset0, position.asset0_amount, 0, hyperliquid)
-    check_and_rebalance(hedge, position.asset1, position.asset1_amount, 1, hyperliquid)
+    check_and_rebalance(hedge, position.asset0, position.asset0_amount, 0, hyperliquid) unless STABLE_COINS.include?(position.asset0)
+    check_and_rebalance(hedge, position.asset1, position.asset1_amount, 1, hyperliquid) unless STABLE_COINS.include?(position.asset1)
+
+    if STABLE_COINS.include?(position.asset0)
+      Rails.logger.debug { "[HedgeSyncJob] hedge #{hedge.id}: skipping stablecoin #{position.asset0}" }
+    end
+    if STABLE_COINS.include?(position.asset1)
+      Rails.logger.debug { "[HedgeSyncJob] hedge #{hedge.id}: skipping stablecoin #{position.asset1}" }
+    end
   end
 
   # Rebalances the short for a single asset if needed.
