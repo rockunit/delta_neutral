@@ -21,6 +21,15 @@ class HyperliquidService
     "WSOL" => "SOL"
   }.freeze
 
+  # Stables for normalize
+  STABLE_COINS = %w[USDC USDT DAI BUSD TUSD USDP].freeze
+
+  def self.normalize_symbol(symbol)
+    # For stables as is
+    return symbol if STABLE_COINS.include?(symbol)
+    SYMBOL_MAP.fetch(symbol, symbol)
+  end
+
   # Translates a Uniswap token symbol to its Hyperliquid equivalent.
   #
   # Returns the symbol unchanged if no mapping exists (e.g. +"USDC"+ stays +"USDC"+).
