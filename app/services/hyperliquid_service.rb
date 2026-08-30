@@ -120,23 +120,35 @@ class HyperliquidService
     pos
   end
 
+
+  # Stables list
+  STABLE_COINS = %w[USDC USDT DAI BUSD TUSD USDP].freeze
+  
   # Returns the size decimal precision for a given asset.
   #
   # Fetches and caches the metadata for all perp assets on first call.
   #
   # @param asset [String] the coin symbol (e.g. +"ETH"+)
   # @return [Integer] the number of decimal places allowed for order sizes
+  
+  
   def sz_decimals(asset)
-    @sz_decimals_cache ||= begin
-      meta = sdk.info.meta
-      (meta["universe"] || []).each_with_object({}) do |a, h|
-        h[a["name"]] = a["szDecimals"]
-      end
-    end
-    @sz_decimals_cache.fetch(asset) do
-      raise ArgumentError, "Unknown asset or no szDecimals available: #{asset}"
+  # If stable returns default (6 decimals)
+  return 6 if STABLE_COINS.include?(asset)
+
+  @sz_decimals_cache ||= begin
+    meta = sdk.info.meta
+    (meta["universe"] || []).each_with_object({}) do |a, h|
+      h[a["name"]] = a["szDecimals"]
     end
   end
+  @sz_decimals_cache.fetch(asset) do
+    # If unknown return default,
+    # fix display
+    Rails.logger.warn "Unknown asset or no szDecimals available: #{asset}, using default 6"
+    6
+  end
+end
 
   # Returns all fills for the given address since the given timestamp.
   #
