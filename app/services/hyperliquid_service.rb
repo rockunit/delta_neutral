@@ -10,6 +10,8 @@
 #   service.open_short(asset: "ETH", size: BigDecimal("0.5"))
 class HyperliquidService
   # Raised when a Hyperliquid order is rejected (e.g. below minimum value).
+  # Stables list
+  STABLE_COINS = %w[USDC USDT DAI BUSD TUSD USDP].freeze
   class OrderError < StandardError; end
 
   # Maps wrapped token symbols from Uniswap to Hyperliquid trading symbols.
@@ -130,8 +132,7 @@ class HyperliquidService
   end
 
 
-  # Stables list
-  STABLE_COINS = %w[USDC USDT DAI BUSD TUSD USDP].freeze
+
   
   # Returns the size decimal precision for a given asset.
   #
