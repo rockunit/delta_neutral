@@ -8,6 +8,8 @@ class HedgesController < ApplicationController
   # Shows a single hedge and its rebalance history in descending order.
   #
   # @return [void]
+  # Stables
+  STABLE_COINS = %w[USDC USDT DAI BUSD TUSD USDP].freeze
   def show
     @hedge = find_hedge
     @rebalances = @hedge.short_rebalances.order(rebalanced_at: :desc).limit(10)
@@ -26,8 +28,7 @@ class HedgesController < ApplicationController
       @shorts = []
       flash.now[:alert] = "Could not load Hyperliquid positions."
     end
-    # Stables
-    STABLE_COINS = %w[USDC USDT DAI BUSD TUSD USDP].freeze
+
     
     @asset_metrics = [
       [ position.asset0, position.asset0_amount, 0 ],
