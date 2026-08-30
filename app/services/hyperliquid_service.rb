@@ -23,8 +23,6 @@ class HyperliquidService
     "WSOL" => "SOL"
   }.freeze
 
-  # Stables for normalize
-  STABLE_COINS = %w[USDC USDT DAI BUSD TUSD USDP].freeze
 
   def self.normalize_symbol(symbol)
     # For stables as is
