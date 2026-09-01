@@ -54,6 +54,25 @@ class UniswapService
     }
   GRAPHQL
 
+  # NEW QUERY for fetching liquidity, ticks, and sqrtPrice
+  POSITION_DETAILS_QUERY = <<~GRAPHQL
+    query($positionId: String!) {
+      position(id: $positionId) {
+        id
+        liquidity
+        tickLower { tickIdx }
+        tickUpper { tickIdx }
+        pool {
+          id
+          tick
+          sqrtPrice
+        }
+        token0 { decimals }
+        token1 { decimals }
+      }
+    }
+  GRAPHQL
+
   # @param subgraph_url [String, nil] The Graph subgraph endpoint; falls back
   #   to +UNISWAP_SUBGRAPH_URL+
   # @param api_key [String, nil] bearer token for authenticated access; falls
@@ -96,16 +115,6 @@ class UniswapService
       }
     end
   end
-
-  POSITION_QUERY = <<~GRAPHQL
-    query($positionId: String!) {
-      position(id: $positionId) {
-        id
-        collectedFeesToken0
-        collectedFeesToken1
-      }
-    }
-  GRAPHQL
 
   # Returns cumulative collected fees for a single position.
   #
@@ -153,6 +162,58 @@ class UniswapService
     }
   end
 
+  # NEW: Returns the current token amounts for a single position based on liquidity and price.
+  #
+  # @param external_id [String] the Uniswap position NFT token ID
+  # @return [Hash, nil] includes +:asset0_amount+, +:asset1_amount+ as BigDecimal
+  #   or +nil+ if position not found or has zero liquidity
+  def fetch_position_amounts(external_id)
+    Rails.logger.debug { "[UniswapService] fetch_position_amounts for position #{external_id}" }
+    result = execute_query(POSITION_DETAILS_QUERY, { positionId: external_id })
+    pos = result.dig("data", "position")
+    unless pos
+      Rails.logger.debug { "[UniswapService] fetch_position_amounts: position #{external_id} not found" }
+      return nil
+    end
+
+    liquidity = pos["liquidity"].to_i
+    return nil if liquidity == 0
+
+    tick_lower = pos.dig("tickLower", "tickIdx").to_i
+    tick_upper = pos.dig("tickUpper", "tickIdx").to_i
+    current_tick = pos.dig("pool", "tick").to_i
+    sqrt_price_x96 = pos.dig("pool", "sqrtPrice").to_i
+    decimals0 = pos.dig("token0", "decimals").to_i
+    decimals1 = pos.dig("token1", "decimals").to_i
+
+    # Compute raw amounts using Uniswap V3 formulas
+    raw = calculate_amounts_for_liquidity(
+      liquidity: liquidity,
+      tick_lower: tick_lower,
+      tick_upper: tick_upper,
+      current_tick: current_tick,
+      sqrt_price_x96: sqrt_price_x96
+    )
+
+    {
+      asset0_amount: raw[:amount0] / (10 ** decimals0),
+      asset1_amount: raw[:amount1] / (10 ** decimals1)
+    }
+  rescue => e
+    Rails.logger.error "[UniswapService] fetch_position_amounts failed for #{external_id}: #{e.message}"
+    nil
+  end
+
+  POSITION_QUERY = <<~GRAPHQL
+    query($positionId: String!) {
+      position(id: $positionId) {
+        id
+        collectedFeesToken0
+        collectedFeesToken1
+      }
+    }
+  GRAPHQL
+
   private
 
   # Executes a GraphQL query against the configured subgraph endpoint.
@@ -187,5 +248,47 @@ class UniswapService
 
     Rails.logger.debug { "[UniswapService] GraphQL response OK, data keys: #{parsed["data"]&.keys&.join(", ")}" }
     parsed
+  end
+
+  # Calculates the token amounts for a given liquidity position.
+  #
+  # Based on Uniswap V3 formulas:
+  # - If current sqrtPrice <= sqrtPriceLower => all in token0
+  # - If current sqrtPrice >= sqrtPriceUpper => all in token1
+  # - Else split between both
+  #
+  # @param liquidity [Integer] the liquidity amount (Q64.96)
+  # @param tick_lower [Integer] lower tick
+  # @param tick_upper [Integer] upper tick
+  # @param current_tick [Integer] current tick of the pool
+  # @param sqrt_price_x96 [Integer] current sqrtPriceX96 of the pool
+  # @return [Hash] with keys +:amount0+, +:amount1+ (as BigDecimal, raw, not divided by decimals)
+  def calculate_amounts_for_liquidity(liquidity:, tick_lower:, tick_upper:, current_tick:, sqrt_price_x96:)
+    # Convert ticks to sqrtPrice (using 1.0001^(tick/2))
+    sqrt_price_a = tick_to_sqrt_price(tick_lower)
+    sqrt_price_b = tick_to_sqrt_price(tick_upper)
+    sqrt_price = sqrt_price_x96.to_d / 2**96
+
+    if sqrt_price <= sqrt_price_a
+      amount0 = liquidity * (sqrt_price_b - sqrt_price_a) / (sqrt_price_a * sqrt_price_b)
+      amount1 = 0
+    elsif sqrt_price < sqrt_price_b
+      amount0 = liquidity * (sqrt_price_b - sqrt_price) / (sqrt_price * sqrt_price_b)
+      amount1 = liquidity * (sqrt_price - sqrt_price_a)
+    else
+      amount0 = 0
+      amount1 = liquidity * (sqrt_price_b - sqrt_price_a)
+    end
+
+    { amount0: amount0, amount1: amount1 }
+  end
+
+  # Converts a tick index to a sqrtPrice (Q64.96-like value) using 1.0001^(tick/2).
+  #
+  # @param tick [Integer] the tick index
+  # @return [BigDecimal] the sqrtPrice (as a decimal number, not scaled)
+  def tick_to_sqrt_price(tick)
+    # 1.0001^(tick/2) using BigDecimal for precision
+    (BigDecimal("1.0001") ** (tick / 2.0))
   end
 end
