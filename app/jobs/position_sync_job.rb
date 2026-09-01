@@ -37,10 +37,11 @@ class PositionSyncJob < ApplicationJob
 
   private
 
-  # Syncs prices and creates a {PnlSnapshot} for a single position.
+  # Syncs prices, amounts, and creates a {PnlSnapshot} for a single position.
   #
   # Skips the position if no pool data is available from the subgraph.
   # Fetches unrealized hedge P&L from Hyperliquid if an active hedge exists.
+  # Updates the position's token amounts using the Uniswap subgraph.
   #
   # @param position [Position] the position to sync
   # @param uniswap [UniswapService] configured Uniswap subgraph client
@@ -49,14 +50,27 @@ class PositionSyncJob < ApplicationJob
   # @return [void]
   def sync_position(position, uniswap, hyperliquid, ethereum)
     Rails.logger.debug { "[PositionSyncJob] syncing position #{position.id} (#{position.asset0}/#{position.asset1}, pool=#{position.pool_address})" }
+
+    # 1. Get pool prices and decimals
     pool_data = uniswap.fetch_pool_data(position.pool_address)
     unless pool_data
       Rails.logger.warn("PositionSyncJob: skipping position #{position.id} — no pool data returned from subgraph")
       return
     end
 
-    Rails.logger.debug { "[PositionSyncJob] position #{position.id} prices: #{position.asset0} $#{pool_data[:token0_price_usd]&.round(4)}, #{position.asset1} $#{pool_data[:token1_price_usd]&.round(4)}" }
+    # 2. Get current token amounts using liquidity-based calculation
+    amounts = uniswap.fetch_position_amounts(position.external_id)
+    if amounts
+      Rails.logger.debug { "[PositionSyncJob] position #{position.id} current amounts: #{position.asset0}=#{amounts[:asset0_amount]}, #{position.asset1}=#{amounts[:asset1_amount]}" }
+      position.update!(
+        asset0_amount: amounts[:asset0_amount],
+        asset1_amount: amounts[:asset1_amount]
+      )
+    else
+      Rails.logger.warn("PositionSyncJob: could not fetch amounts for position #{position.id}, keeping existing values")
+    end
 
+    # 3. Update prices
     old_prices = [ position.asset0_price_usd, position.asset1_price_usd ]
     position.update!(
       asset0_price_usd: pool_data[:token0_price_usd],
@@ -64,11 +78,13 @@ class PositionSyncJob < ApplicationJob
     )
     Rails.logger.debug { "[PositionSyncJob] position #{position.id} price update: asset0 #{old_prices[0]} → #{position.asset0_price_usd}, asset1 #{old_prices[1]} → #{position.asset1_price_usd}" }
 
+    # 4. Set entry value if not set
     if position.entry_value_usd.nil?
       position.update!(entry_value_usd: position.total_value_usd)
       Rails.logger.debug { "[PositionSyncJob] position #{position.id} entry_value_usd set to #{position.entry_value_usd}" }
     end
 
+    # 5. Compute hedge P&L
     hedge_unrealized = BigDecimal("0")
     hedge_realized = BigDecimal("0")
 
@@ -96,16 +112,17 @@ class PositionSyncJob < ApplicationJob
 
     pool_unrealized = position.entry_value_usd ? position.total_value_usd - position.entry_value_usd : BigDecimal("0")
 
+    # 6. Get uncollected fees via Ethereum RPC
     uncollected = ethereum.fetch_uncollected_fees(
       position.external_id,
       token0_decimals: pool_data[:token0_decimals],
       token1_decimals: pool_data[:token1_decimals]
     )
 
-    # Subgraph cumulative collected (reliable once indexed)
+    # 7. Subgraph cumulative collected fees
     subgraph = uniswap.fetch_position_fees(position.external_id)
 
-    # Diff-based collected (detects collections in real-time before subgraph indexes)
+    # 8. Compute collected via diff since last snapshot
     prev_snap = position.pnl_snapshots.order(captured_at: :desc).first
     diff_collected0 = prev_snap&.collected_fees0 || BigDecimal("0")
     diff_collected1 = prev_snap&.collected_fees1 || BigDecimal("0")
@@ -116,12 +133,13 @@ class PositionSyncJob < ApplicationJob
       diff_collected1 += drop1 if drop1 > 0
     end
 
-    # Use whichever source reports higher (subgraph may lag, diff may have state gaps)
+    # Use whichever source reports higher
     collected0 = [ subgraph[:collected_fees0], diff_collected0 ].max
     collected1 = [ subgraph[:collected_fees1], diff_collected1 ].max
 
     Rails.logger.debug { "[PositionSyncJob] position #{position.id} fees: collected0=#{collected0}, collected1=#{collected1}, uncollected=#{uncollected.inspect}" }
 
+    # 9. Create PnL snapshot
     PnlSnapshot.create!(
       position: position,
       captured_at: Time.current,
